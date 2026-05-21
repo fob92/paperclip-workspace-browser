@@ -1,4 +1,4 @@
-import type { PluginPageProps, PluginSidebarProps } from "@paperclipai/plugin-sdk/ui";
+import type { PluginDetailTabProps, PluginProjectSidebarItemProps } from "@paperclipai/plugin-sdk/ui";
 import { usePluginAction, usePluginData, usePluginToast } from "@paperclipai/plugin-sdk/ui";
 import {
   startTransition,
@@ -7,13 +7,11 @@ import {
   useMemo,
   useState,
   type CSSProperties,
+  type MouseEvent,
 } from "react";
 
-type ProjectRecord = {
-  id: string;
-  name: string;
-  status: string | null;
-};
+const PLUGIN_KEY = "paperclip-workspace-browser";
+const PROJECT_TAB_SLOT_ID = "workspace-browser-project-tab";
 
 type WorkspaceRecord = {
   id: string;
@@ -62,12 +60,6 @@ type DownloadPayload = {
   mimeType: string;
   base64: string;
   byteLength: number;
-};
-
-type QueryState = {
-  projectId: string | null;
-  workspaceId: string | null;
-  file: string | null;
 };
 
 type TreeNode = {
@@ -123,13 +115,6 @@ const buttonStyle: CSSProperties = {
   cursor: "pointer",
 };
 
-const activeButtonStyle: CSSProperties = {
-  ...buttonStyle,
-  background: "var(--foreground)",
-  color: "var(--background)",
-  borderColor: "var(--foreground)",
-};
-
 const inputStyle: CSSProperties = {
   width: "100%",
   border: "1px solid var(--border)",
@@ -158,42 +143,28 @@ const previewTextStyle: CSSProperties = {
   fontFamily: "inherit",
 };
 
-function buildWorkspaceRoute(query: Partial<QueryState>) {
-  const params = new URLSearchParams();
-  if (query.projectId) params.set("projectId", query.projectId);
-  if (query.workspaceId) params.set("workspaceId", query.workspaceId);
-  if (query.file) params.set("file", query.file);
-  const search = params.toString();
-  return search ? `/workspace-files?${search}` : "/workspace-files";
+function buildProjectTabValue() {
+  return `plugin:${PLUGIN_KEY}:${PROJECT_TAB_SLOT_ID}`;
 }
 
-function buildCompanyWorkspaceHref(
+function buildProjectWorkspaceHref(
   companyPrefix: string | null | undefined,
-  query: Partial<QueryState> = {},
+  projectRef: string,
 ) {
-  const route = buildWorkspaceRoute(query);
-  const normalizedPrefix = typeof companyPrefix === "string" ? companyPrefix.trim().toUpperCase() : "";
-  return normalizedPrefix ? `/${normalizedPrefix}${route}` : route;
+  const prefix = companyPrefix ? `/${companyPrefix}` : "";
+  const tabValue = buildProjectTabValue();
+  return `${prefix}/projects/${projectRef}?tab=${encodeURIComponent(tabValue)}`;
 }
 
-function parseQuery(search: string): QueryState {
-  const params = new URLSearchParams(search);
-  return {
-    projectId: params.get("projectId"),
-    workspaceId: params.get("workspaceId"),
-    file: params.get("file"),
-  };
-}
-
-function readWindowQuery(): QueryState {
-  if (typeof window === "undefined") {
-    return {
-      projectId: null,
-      workspaceId: null,
-      file: null,
-    };
-  }
-  return parseQuery(window.location.search);
+function isPlainLeftClick(event: MouseEvent<HTMLAnchorElement>) {
+  return (
+    !event.defaultPrevented
+    && event.button === 0
+    && !event.metaKey
+    && !event.altKey
+    && !event.ctrlKey
+    && !event.shiftKey
+  );
 }
 
 function formatBytes(value: number | null): string {
@@ -398,94 +369,57 @@ function FileTreePanel({
   return <div style={{ display: "grid", gap: "6px" }}>{renderNodes(nodes)}</div>;
 }
 
-export function WorkspaceSidebarLink({ context }: PluginSidebarProps) {
-  const href = buildCompanyWorkspaceHref(context.companyPrefix);
-  const isActive = typeof window !== "undefined" && window.location.pathname === href;
+export function WorkspaceProjectFilesLink({ context }: PluginProjectSidebarItemProps) {
+  const projectId = context.entityId;
+  const projectRef = (context as PluginProjectSidebarItemProps["context"] & { projectRef?: string | null })
+    .projectRef
+    ?? projectId;
+  const href = buildProjectWorkspaceHref(context.companyPrefix, projectRef);
+  const tabValue = buildProjectTabValue();
+  const isActive = typeof window !== "undefined" && (() => {
+    const pathname = window.location.pathname.replace(/\/+$/, "");
+    const segments = pathname.split("/").filter(Boolean);
+    const projectsIndex = segments.indexOf("projects");
+    const activeProjectRef = projectsIndex >= 0 ? segments[projectsIndex + 1] ?? null : null;
+    const activeTab = new URLSearchParams(window.location.search).get("tab");
+    if (activeTab !== tabValue) return false;
+    if (!activeProjectRef) return false;
+    return activeProjectRef === projectId || activeProjectRef === projectRef;
+  })();
+
+  function handleClick(event: MouseEvent<HTMLAnchorElement>) {
+    if (!isPlainLeftClick(event)) {
+      return;
+    }
+
+    event.preventDefault();
+    window.history.pushState({}, "", href);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }
 
   return (
     <a
       href={href}
+      onClick={handleClick}
       aria-current={isActive ? "page" : undefined}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "10px",
-        width: "100%",
-        padding: "8px 12px",
-        borderRadius: "12px",
-        textDecoration: "none",
-        color: "inherit",
-        fontSize: "13px",
-        fontWeight: 600,
-        cursor: "pointer",
-      }}
+      className={`block px-3 py-1 text-[12px] truncate transition-colors ${
+        isActive
+          ? "bg-accent text-foreground font-medium"
+          : "text-muted-foreground hover:text-foreground hover:bg-accent/50"
+      }`}
     >
-      <span aria-hidden="true">Files</span>
-      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Workspace Files</span>
+      Workspace Files
     </a>
   );
 }
 
-export function WorkspaceBrowserPage({ context }: PluginPageProps) {
+export function WorkspaceBrowserTab({ context }: PluginDetailTabProps) {
   const toast = usePluginToast();
-  const [query, setQuery] = useState<QueryState>(() => readWindowQuery());
+  const projectId = context.entityId;
+  const companyId = context.companyId;
   const isCompactLayout = useMediaQuery("(max-width: 1080px)");
-
-  useEffect(() => {
-    if (typeof window === "undefined") return undefined;
-
-    const syncQuery = () => setQuery(readWindowQuery());
-    window.addEventListener("popstate", syncQuery);
-    window.addEventListener("hashchange", syncQuery);
-    return () => {
-      window.removeEventListener("popstate", syncQuery);
-      window.removeEventListener("hashchange", syncQuery);
-    };
-  }, []);
-
-  const projectsResult = usePluginData<ProjectRecord[]>("projects", {
-    companyId: context.companyId,
-  });
-  const projects = projectsResult.data ?? [];
-  const projectsLoading = projectsResult.loading;
-
-  const effectiveProjectId = query.projectId ?? projects[0]?.id ?? null;
-
-  const workspacesResult = usePluginData<WorkspaceRecord[]>("project-workspaces", {
-    companyId: context.companyId,
-    projectId: effectiveProjectId ?? "",
-  });
-  const workspaces = workspacesResult.data ?? [];
-  const workspacesLoading = workspacesResult.loading;
-
-  const effectiveWorkspace = useMemo(() => {
-    if (workspaces.length === 0) return null;
-    return workspaces.find((workspace) => workspace.id === query.workspaceId)
-      ?? workspaces.find((workspace) => workspace.isPrimary)
-      ?? workspaces[0]
-      ?? null;
-  }, [query.workspaceId, workspaces]);
-
-  const rootFileList = usePluginData<{ entries: FileEntry[] }>("file-list", {
-    companyId: context.companyId,
-    projectId: effectiveProjectId ?? "",
-    workspaceId: effectiveWorkspace?.id ?? "",
-    directoryPath: "",
-  });
-
-  const filePreview = usePluginData<PreviewRecord>("file-preview", {
-    companyId: context.companyId,
-    projectId: effectiveProjectId ?? "",
-    workspaceId: effectiveWorkspace?.id ?? "",
-    filePath: query.file ?? "",
-  });
-
-  const loadFileList = usePluginAction("load-file-list");
-  const searchWorkspace = usePluginAction("search-workspace");
-  const downloadFile = usePluginAction("download-file");
-  const downloadZip = usePluginAction("download-zip");
-  const terminalCommand = usePluginAction("terminal-command");
-
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [nodes, setNodes] = useState<TreeNode[]>([]);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set());
   const [loadedDirs, setLoadedDirs] = useState<Set<string>>(() => new Set());
@@ -505,51 +439,56 @@ export function WorkspaceBrowserPage({ context }: PluginPageProps) {
     truncated: false,
   });
 
-  function updateQuery(nextQuery: QueryState, replace = false) {
-    if (typeof window === "undefined") {
-      setQuery(nextQuery);
-      return;
-    }
+  const workspacesResult = usePluginData<WorkspaceRecord[]>("project-workspaces", {
+    companyId,
+    projectId,
+  });
+  const workspaces = workspacesResult.data ?? [];
 
-    const href = buildCompanyWorkspaceHref(context.companyPrefix, nextQuery);
-    const method = replace ? "replaceState" : "pushState";
-    window.history[method](null, "", href);
-    setQuery(nextQuery);
-  }
-
-  async function navigateSelection(next: Partial<QueryState>, replace = false) {
-    const merged: QueryState = {
-      projectId: next.projectId === undefined ? (effectiveProjectId ?? query.projectId) : next.projectId,
-      workspaceId: next.workspaceId === undefined ? (effectiveWorkspace?.id ?? query.workspaceId) : next.workspaceId,
-      file: next.file === undefined ? query.file : next.file,
-    };
-    updateQuery(merged, replace);
-  }
+  const effectiveWorkspace = useMemo(() => {
+    if (workspaces.length === 0) return null;
+    return workspaces.find((workspace) => workspace.id === workspaceId)
+      ?? workspaces.find((workspace) => workspace.isPrimary)
+      ?? workspaces[0]
+      ?? null;
+  }, [workspaceId, workspaces]);
 
   useEffect(() => {
-    if (query.projectId || !projects[0]?.id) return;
-    void navigateSelection({ projectId: projects[0].id }, true);
-  }, [projects, query.projectId]);
+    if (!effectiveWorkspace) return;
+    if (workspaceId === effectiveWorkspace.id) return;
+    setWorkspaceId(effectiveWorkspace.id);
+  }, [effectiveWorkspace, workspaceId]);
 
-  useEffect(() => {
-    if (!effectiveProjectId || !effectiveWorkspace) return;
-    if (query.workspaceId === effectiveWorkspace.id) return;
-    void navigateSelection({
-      projectId: effectiveProjectId,
-      workspaceId: effectiveWorkspace.id,
-      file: query.file,
-    }, true);
-  }, [effectiveProjectId, effectiveWorkspace, query.file, query.workspaceId]);
+  const rootFileList = usePluginData<{ entries: FileEntry[] }>("file-list", {
+    companyId,
+    projectId,
+    workspaceId: effectiveWorkspace?.id ?? "",
+    directoryPath: "",
+  });
+
+  const filePreview = usePluginData<PreviewRecord>("file-preview", {
+    companyId,
+    projectId,
+    workspaceId: effectiveWorkspace?.id ?? "",
+    filePath: selectedFile ?? "",
+  });
+
+  const loadFileList = usePluginAction("load-file-list");
+  const searchWorkspace = usePluginAction("search-workspace");
+  const downloadFile = usePluginAction("download-file");
+  const downloadZip = usePluginAction("download-zip");
+  const terminalCommand = usePluginAction("terminal-command");
 
   useEffect(() => {
     setNodes(rootFileList.data?.entries ? fileTreeNodes(rootFileList.data.entries) : []);
+  }, [rootFileList.data]);
+
+  useEffect(() => {
     setExpandedPaths(new Set());
     setLoadedDirs(new Set());
     setLoadingDirs(new Set());
     setCheckedPaths(new Set());
-  }, [effectiveWorkspace?.id, rootFileList.data]);
-
-  useEffect(() => {
+    setSelectedFile(null);
     setSearchInput("");
     setSearchState({
       loading: false,
@@ -561,7 +500,7 @@ export function WorkspaceBrowserPage({ context }: PluginPageProps) {
 
   useEffect(() => {
     let cancelled = false;
-    if (!effectiveProjectId || !effectiveWorkspace?.id || deferredSearchInput.length < 2) {
+    if (!projectId || !effectiveWorkspace?.id || deferredSearchInput.length < 2) {
       setSearchState({
         loading: false,
         error: null,
@@ -573,8 +512,8 @@ export function WorkspaceBrowserPage({ context }: PluginPageProps) {
 
     setSearchState((current) => ({ ...current, loading: true, error: null }));
     void searchWorkspace({
-      companyId: context.companyId,
-      projectId: effectiveProjectId,
+      companyId,
+      projectId,
       workspaceId: effectiveWorkspace.id,
       query: deferredSearchInput,
       mode: "both",
@@ -602,13 +541,14 @@ export function WorkspaceBrowserPage({ context }: PluginPageProps) {
     return () => {
       cancelled = true;
     };
-  }, [context.companyId, deferredSearchInput, effectiveProjectId, effectiveWorkspace?.id, searchWorkspace]);
+  }, [companyId, deferredSearchInput, effectiveWorkspace?.id, projectId, searchWorkspace]);
 
   useEffect(() => {
     let cancelled = false;
+
     async function ensurePathLoaded() {
-      if (!query.file || !effectiveProjectId || !effectiveWorkspace?.id) return;
-      const directory = parentDirectory(query.file);
+      if (!selectedFile || !projectId || !effectiveWorkspace?.id) return;
+      const directory = parentDirectory(selectedFile);
       if (directory == null) return;
 
       const segments = directory.split("/").filter(Boolean);
@@ -618,8 +558,8 @@ export function WorkspaceBrowserPage({ context }: PluginPageProps) {
         setExpandedPaths((current) => new Set(current).add(currentPath));
         if (loadedDirs.has(currentPath)) continue;
         const response = await loadFileList({
-          companyId: context.companyId,
-          projectId: effectiveProjectId,
+          companyId,
+          projectId,
           workspaceId: effectiveWorkspace.id,
           directoryPath: currentPath,
         }) as { entries?: FileEntry[] };
@@ -633,7 +573,7 @@ export function WorkspaceBrowserPage({ context }: PluginPageProps) {
     return () => {
       cancelled = true;
     };
-  }, [context.companyId, effectiveProjectId, effectiveWorkspace?.id, loadFileList, loadedDirs, query.file]);
+  }, [companyId, effectiveWorkspace?.id, loadFileList, loadedDirs, projectId, selectedFile]);
 
   async function handleToggleDir(dirPath: string) {
     setExpandedPaths((current) => {
@@ -643,14 +583,14 @@ export function WorkspaceBrowserPage({ context }: PluginPageProps) {
       return next;
     });
 
-    if (!effectiveProjectId || !effectiveWorkspace?.id) return;
+    if (!projectId || !effectiveWorkspace?.id) return;
     if (loadedDirs.has(dirPath) || loadingDirs.has(dirPath)) return;
 
     setLoadingDirs((current) => new Set(current).add(dirPath));
     try {
       const response = await loadFileList({
-        companyId: context.companyId,
-        projectId: effectiveProjectId,
+        companyId,
+        projectId,
         workspaceId: effectiveWorkspace.id,
         directoryPath: dirPath,
       }) as { entries?: FileEntry[] };
@@ -681,11 +621,11 @@ export function WorkspaceBrowserPage({ context }: PluginPageProps) {
   }
 
   async function handleDownloadSelected() {
-    if (!effectiveProjectId || !effectiveWorkspace?.id) return;
+    if (!projectId || !effectiveWorkspace?.id) return;
     try {
       const response = await downloadZip({
-        companyId: context.companyId,
-        projectId: effectiveProjectId,
+        companyId,
+        projectId,
         workspaceId: effectiveWorkspace.id,
         paths: [...checkedPaths],
         archiveBaseName: checkedPaths.size > 0 ? "workspace-selection" : "workspace-files",
@@ -706,11 +646,11 @@ export function WorkspaceBrowserPage({ context }: PluginPageProps) {
   }
 
   async function handleDownloadFile(filePath: string | null) {
-    if (!effectiveProjectId || !effectiveWorkspace?.id || !filePath) return;
+    if (!projectId || !effectiveWorkspace?.id || !filePath) return;
     try {
       const response = await downloadFile({
-        companyId: context.companyId,
-        projectId: effectiveProjectId,
+        companyId,
+        projectId,
         workspaceId: effectiveWorkspace.id,
         filePath,
       }) as DownloadPayload;
@@ -725,11 +665,11 @@ export function WorkspaceBrowserPage({ context }: PluginPageProps) {
   }
 
   async function handleCopyTerminalCommand(targetPath: string | null) {
-    if (!effectiveProjectId || !effectiveWorkspace?.id) return;
+    if (!projectId || !effectiveWorkspace?.id) return;
     try {
       const response = await terminalCommand({
-        companyId: context.companyId,
-        projectId: effectiveProjectId,
+        companyId,
+        projectId,
         workspaceId: effectiveWorkspace.id,
         targetPath: targetPath ?? "",
       }) as { command: string };
@@ -747,8 +687,6 @@ export function WorkspaceBrowserPage({ context }: PluginPageProps) {
       });
     }
   }
-
-  const activeProject = projects.find((project) => project.id === effectiveProjectId) ?? null;
 
   return (
     <main
@@ -772,11 +710,11 @@ export function WorkspaceBrowserPage({ context }: PluginPageProps) {
           <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "center", justifyContent: "space-between" }}>
             <div style={{ display: "grid", gap: "4px" }}>
               <div style={{ fontSize: "12px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--muted-foreground)" }}>
-                Full Workspace Access
+                Project Workspace Access
               </div>
               <h1 style={{ margin: 0, fontSize: isCompactLayout ? "24px" : "28px", lineHeight: 1.1 }}>Workspace Files</h1>
               <div style={mutedTextStyle}>
-                Browse any project workspace, preview generated artifacts, and export exactly what an agent produced.
+                Browse the real project workspace, preview generated artifacts, and export exactly what the agent produced.
               </div>
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
@@ -791,42 +729,23 @@ export function WorkspaceBrowserPage({ context }: PluginPageProps) {
               <button
                 type="button"
                 style={buttonStyle}
-                onClick={() => void handleCopyTerminalCommand(query.file)}
+                onClick={() => void handleCopyTerminalCommand(selectedFile)}
                 disabled={!effectiveWorkspace}
               >
                 Open in terminal
               </button>
             </div>
           </div>
-          <div style={{ display: "grid", gap: "10px", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))" }}>
-            <label style={{ display: "grid", gap: "6px" }}>
-              <span style={mutedTextStyle}>Project</span>
-              <select
-                value={effectiveProjectId ?? ""}
-                style={inputStyle}
-                onChange={(event) => void navigateSelection({
-                  projectId: event.target.value || null,
-                  workspaceId: null,
-                  file: null,
-                })}
-              >
-                {projectsLoading ? <option value="">Loading projects…</option> : null}
-                {projects.map((project) => (
-                  <option key={project.id} value={project.id}>{project.name}</option>
-                ))}
-              </select>
-            </label>
+          <div style={{ display: "grid", gap: "10px", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))" }}>
             <label style={{ display: "grid", gap: "6px" }}>
               <span style={mutedTextStyle}>Workspace</span>
               <select
                 value={effectiveWorkspace?.id ?? ""}
                 style={inputStyle}
-                onChange={(event) => void navigateSelection({
-                  workspaceId: event.target.value || null,
-                  file: null,
-                })}
+                onChange={(event) => setWorkspaceId(event.target.value || null)}
               >
-                {workspacesLoading ? <option value="">Loading workspaces…</option> : null}
+                {workspacesResult.loading ? <option value="">Loading workspaces…</option> : null}
+                {!workspacesResult.loading && workspaces.length === 0 ? <option value="">No workspaces found</option> : null}
                 {workspaces.map((workspace) => (
                   <option key={workspace.id} value={workspace.id}>{workspace.label}</option>
                 ))}
@@ -839,6 +758,7 @@ export function WorkspaceBrowserPage({ context }: PluginPageProps) {
                 onChange={(event) => setSearchInput(event.target.value)}
                 placeholder="Search file names and text content"
                 style={inputStyle}
+                disabled={!effectiveWorkspace}
               />
             </label>
           </div>
@@ -846,7 +766,11 @@ export function WorkspaceBrowserPage({ context }: PluginPageProps) {
             <div style={mutedTextStyle}>
               Root: <code>{effectiveWorkspace.path}</code>
             </div>
-          ) : null}
+          ) : (
+            <div style={mutedTextStyle}>
+              This project does not currently expose a readable workspace path.
+            </div>
+          )}
         </div>
       </section>
 
@@ -856,42 +780,10 @@ export function WorkspaceBrowserPage({ context }: PluginPageProps) {
           gap: "16px",
           gridTemplateColumns: isCompactLayout
             ? "minmax(0, 1fr)"
-            : "minmax(220px, 280px) minmax(260px, 340px) minmax(0, 1fr)",
+            : "minmax(260px, 340px) minmax(0, 1fr)",
           alignItems: "start",
         }}
       >
-        <aside style={sectionStyle}>
-          <div style={{ display: "grid", gap: "4px" }}>
-            <strong>Projects</strong>
-            <span style={mutedTextStyle}>{projects.length} visible in this company</span>
-          </div>
-          <div style={{ display: "grid", gap: "8px" }}>
-            {projects.map((project) => (
-              <button
-                key={project.id}
-                type="button"
-                style={project.id === effectiveProjectId ? activeButtonStyle : buttonStyle}
-                onClick={() => void navigateSelection({
-                  projectId: project.id,
-                  workspaceId: null,
-                  file: null,
-                })}
-              >
-                {project.name}
-              </button>
-            ))}
-          </div>
-          {activeProject ? (
-            <div style={{ display: "grid", gap: "6px" }}>
-              <strong>{activeProject.name}</strong>
-              <span style={mutedTextStyle}>Status: {activeProject.status ?? "unknown"}</span>
-              {effectiveWorkspace ? (
-                <span style={mutedTextStyle}>Workspace: {effectiveWorkspace.label}</span>
-              ) : null}
-            </div>
-          ) : null}
-        </aside>
-
         <section style={sectionStyle}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: "8px", alignItems: "center" }}>
             <div>
@@ -900,12 +792,12 @@ export function WorkspaceBrowserPage({ context }: PluginPageProps) {
                 Check files or folders to include them in the next ZIP export.
               </div>
             </div>
-            {query.file ? (
+            {selectedFile ? (
               <button
                 type="button"
                 style={buttonStyle}
                 onClick={() => {
-                  const currentFile = query.file;
+                  const currentFile = selectedFile;
                   if (!currentFile) return;
                   void copyToClipboard(currentFile).then(() => {
                     toast({ title: "Path copied", body: currentFile, tone: "info" });
@@ -926,12 +818,12 @@ export function WorkspaceBrowserPage({ context }: PluginPageProps) {
             nodes={nodes}
             onSelectFile={(nextPath) => {
               startTransition(() => {
-                void navigateSelection({ file: nextPath });
+                setSelectedFile(nextPath);
               });
             }}
             onToggleCheck={handleToggleCheck}
             onToggleDir={(nextPath) => void handleToggleDir(nextPath)}
-            selectedFile={query.file}
+            selectedFile={selectedFile}
           />
           {loadingDirs.size > 0 ? (
             <div style={mutedTextStyle}>Loading {loadingDirs.size} folder{loadingDirs.size === 1 ? "" : "s"}…</div>
@@ -942,23 +834,23 @@ export function WorkspaceBrowserPage({ context }: PluginPageProps) {
           <section style={sectionStyle}>
             <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: "12px" }}>
               <div style={{ display: "grid", gap: "4px" }}>
-                <strong>{fileDisplayName(query.file)}</strong>
-                <span style={mutedTextStyle}>{query.file ?? "Choose a file from the tree or search results."}</span>
+                <strong>{fileDisplayName(selectedFile)}</strong>
+                <span style={mutedTextStyle}>{selectedFile ?? "Choose a file from the tree or search results."}</span>
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
                 <button
                   type="button"
                   style={buttonStyle}
-                  disabled={!query.file}
-                  onClick={() => void handleDownloadFile(query.file)}
+                  disabled={!selectedFile}
+                  onClick={() => void handleDownloadFile(selectedFile)}
                 >
                   Download
                 </button>
                 <button
                   type="button"
                   style={buttonStyle}
-                  disabled={!query.file}
-                  onClick={() => void handleCopyTerminalCommand(query.file)}
+                  disabled={!selectedFile}
+                  onClick={() => void handleCopyTerminalCommand(selectedFile)}
                 >
                   Terminal
                 </button>
@@ -1027,7 +919,7 @@ export function WorkspaceBrowserPage({ context }: PluginPageProps) {
                   type="button"
                   onClick={() => {
                     startTransition(() => {
-                      void navigateSelection({ file: result.path });
+                      setSelectedFile(result.path);
                     });
                   }}
                   style={{

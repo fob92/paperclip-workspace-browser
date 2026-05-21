@@ -1,5 +1,11 @@
 import type { PluginDetailTabProps, PluginProjectSidebarItemProps } from "@paperclipai/plugin-sdk/ui";
-import { usePluginAction, usePluginData, usePluginToast } from "@paperclipai/plugin-sdk/ui";
+import {
+  useHostLocation,
+  useHostNavigation,
+  usePluginAction,
+  usePluginData,
+  usePluginToast,
+} from "@paperclipai/plugin-sdk/ui";
 import {
   startTransition,
   useDeferredValue,
@@ -7,7 +13,6 @@ import {
   useMemo,
   useState,
   type CSSProperties,
-  type MouseEvent,
 } from "react";
 
 const PLUGIN_KEY = "paperclip-workspace-browser";
@@ -154,17 +159,6 @@ function buildProjectWorkspaceHref(
   const prefix = companyPrefix ? `/${companyPrefix}` : "";
   const tabValue = buildProjectTabValue();
   return `${prefix}/projects/${projectRef}?tab=${encodeURIComponent(tabValue)}`;
-}
-
-function isPlainLeftClick(event: MouseEvent<HTMLAnchorElement>) {
-  return (
-    !event.defaultPrevented
-    && event.button === 0
-    && !event.metaKey
-    && !event.altKey
-    && !event.ctrlKey
-    && !event.shiftKey
-  );
 }
 
 function formatBytes(value: number | null): string {
@@ -370,37 +364,29 @@ function FileTreePanel({
 }
 
 export function WorkspaceProjectFilesLink({ context }: PluginProjectSidebarItemProps) {
+  const hostNavigation = useHostNavigation();
+  const location = useHostLocation();
   const projectId = context.entityId;
   const projectRef = (context as PluginProjectSidebarItemProps["context"] & { projectRef?: string | null })
     .projectRef
     ?? projectId;
-  const href = buildProjectWorkspaceHref(context.companyPrefix, projectRef);
+  const route = buildProjectWorkspaceHref(undefined, projectRef);
+  const href = hostNavigation.resolveHref(route);
   const tabValue = buildProjectTabValue();
-  const isActive = typeof window !== "undefined" && (() => {
-    const pathname = window.location.pathname.replace(/\/+$/, "");
+  const isActive = (() => {
+    const pathname = location.pathname.replace(/\/+$/, "");
     const segments = pathname.split("/").filter(Boolean);
     const projectsIndex = segments.indexOf("projects");
     const activeProjectRef = projectsIndex >= 0 ? segments[projectsIndex + 1] ?? null : null;
-    const activeTab = new URLSearchParams(window.location.search).get("tab");
+    const activeTab = new URLSearchParams(location.search).get("tab");
     if (activeTab !== tabValue) return false;
     if (!activeProjectRef) return false;
     return activeProjectRef === projectId || activeProjectRef === projectRef;
   })();
 
-  function handleClick(event: MouseEvent<HTMLAnchorElement>) {
-    if (!isPlainLeftClick(event)) {
-      return;
-    }
-
-    event.preventDefault();
-    window.history.pushState({}, "", href);
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  }
-
   return (
     <a
-      href={href}
-      onClick={handleClick}
+      {...hostNavigation.linkProps(route)}
       aria-current={isActive ? "page" : undefined}
       className={`block px-3 py-1 text-[12px] truncate transition-colors ${
         isActive

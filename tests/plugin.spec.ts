@@ -125,4 +125,45 @@ describe("workspace browser plugin", () => {
     expect(zipResult.fileName).toBe("reports-only.zip");
     expect(Buffer.from(zipResult.base64, "base64").byteLength).toBeGreaterThan(0);
   });
+
+  it("surfaces and resolves the managed primary workspace when no explicit workspace rows exist", async () => {
+    const root = await createWorkspace();
+    const managedWorkspaceRecord = {
+      id: "project-1:managed",
+      projectId: "project-1",
+      name: "Managed Primary",
+      path: root,
+      repoUrl: null,
+      repoRef: null,
+      defaultRef: null,
+      isPrimary: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    const harness = createTestHarness({ manifest });
+    harness.ctx.projects.listWorkspaces = async () => [];
+    harness.ctx.projects.getPrimaryWorkspace = async () => managedWorkspaceRecord;
+
+    await plugin.definition.setup(harness.ctx);
+
+    await expect(harness.getData("project-workspaces", {
+      companyId: "company-1",
+      projectId: "project-1",
+    })).resolves.toEqual([
+      expect.objectContaining({ id: "project-1:managed", isPrimary: true, path: root }),
+    ]);
+
+    await expect(harness.getData("file-list", {
+      companyId: "company-1",
+      projectId: "project-1",
+      workspaceId: "project-1:managed",
+      directoryPath: "",
+    })).resolves.toEqual({
+      entries: expect.arrayContaining([
+        expect.objectContaining({ path: "artifact.txt", isDirectory: false }),
+        expect.objectContaining({ path: "reports", isDirectory: true }),
+      ]),
+    });
+  });
 });

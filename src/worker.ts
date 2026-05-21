@@ -49,17 +49,18 @@ async function resolveWorkspace(
   const companyId = requireString(params, "companyId");
   const projectId = requireString(params, "projectId");
   const workspaceId = readString(params.workspaceId);
+  const primaryWorkspace = await ctx.projects.getPrimaryWorkspace(projectId, companyId);
 
   if (workspaceId) {
     const workspaces = await ctx.projects.listWorkspaces(projectId, companyId);
-    const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
+    const workspace = workspaces.find((candidate) => candidate.id === workspaceId)
+      ?? (primaryWorkspace?.id === workspaceId ? primaryWorkspace : null);
     if (!workspace) {
       throw new Error("Workspace not found");
     }
     return { companyId, projectId, workspace };
   }
 
-  const primaryWorkspace = await ctx.projects.getPrimaryWorkspace(projectId, companyId);
   if (primaryWorkspace) {
     return { companyId, projectId, workspace: primaryWorkspace };
   }
@@ -90,7 +91,14 @@ const plugin = definePlugin({
         return [];
       }
       const workspaces = await ctx.projects.listWorkspaces(projectId, companyId);
-      return workspaces.map(workspaceSummary);
+      if (workspaces.length > 0) {
+        return workspaces.map(workspaceSummary);
+      }
+      const primaryWorkspace = await ctx.projects.getPrimaryWorkspace(projectId, companyId);
+      if (!primaryWorkspace) {
+        return [];
+      }
+      return [workspaceSummary(primaryWorkspace)];
     });
 
     async function loadFileList(params: Record<string, unknown>) {

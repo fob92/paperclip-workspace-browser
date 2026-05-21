@@ -7,6 +7,7 @@ import {
   buildFileDownload,
   buildTerminalCommand,
   buildZipDownload,
+  listDirectory,
   readFilePreview,
   resolveWorkspacePath,
   searchWorkspace,
@@ -23,6 +24,7 @@ async function createWorkspace() {
   await fs.writeFile(path.join(root, "src", "index.ts"), "export const value = 'workspace browser';\n", "utf8");
   await fs.writeFile(path.join(root, "docs", "notes.txt"), "search needle inside this text file\n", "utf8");
   await fs.writeFile(path.join(root, "pixel.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]));
+  await fs.writeFile(path.join(root, "report.pdf"), "%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n", "utf8");
   await fs.writeFile(path.join(root, "binary.bin"), Buffer.from([0, 1, 2, 3]));
   return root;
 }
@@ -38,7 +40,7 @@ describe("workspace filesystem helpers", () => {
     expect(resolveWorkspacePath("/tmp/workspace", "src/index.ts")).toBe("/tmp/workspace/src/index.ts");
   });
 
-  it("reads markdown, image, and binary previews", async () => {
+  it("reads markdown, image, pdf, and binary previews", async () => {
     const workspace = await createWorkspace();
 
     const markdown = await readFilePreview(workspace, "README.md");
@@ -51,7 +53,11 @@ describe("workspace filesystem helpers", () => {
 
     const image = await readFilePreview(workspace, "pixel.png");
     expect(image.kind).toBe("image");
-    expect(image.imageDataUrl).toContain("data:image/png;base64,");
+    expect(image.previewDataUrl).toContain("data:image/png;base64,");
+
+    const pdf = await readFilePreview(workspace, "report.pdf");
+    expect(pdf.kind).toBe("pdf");
+    expect(pdf.previewDataUrl).toContain("data:application/pdf;base64,");
 
     const binary = await readFilePreview(workspace, "binary.bin");
     expect(binary.kind).toBe("binary");
@@ -71,6 +77,27 @@ describe("workspace filesystem helpers", () => {
     expect(byContent.results).toContainEqual(expect.objectContaining({
       path: "docs/notes.txt",
       matchedBy: "content",
+    }));
+  });
+
+  it("skips infrastructure directories during recursive search", async () => {
+    const workspace = await createWorkspace();
+    await fs.mkdir(path.join(workspace, "node_modules", "demo"), { recursive: true });
+    await fs.writeFile(path.join(workspace, "node_modules", "demo", "hidden.txt"), "hidden-module-marker\n", "utf8");
+
+    const results = await searchWorkspace(workspace, "hidden-module-marker", "both");
+    expect(results.results).toEqual([]);
+  });
+
+  it("treats safe symlinked directories as directories in the tree", async () => {
+    const workspace = await createWorkspace();
+    await fs.symlink(path.join(workspace, "docs"), path.join(workspace, "docs-link"));
+
+    const entries = await listDirectory(workspace);
+    expect(entries).toContainEqual(expect.objectContaining({
+      path: "docs-link",
+      isDirectory: true,
+      isSymlink: true,
     }));
   });
 

@@ -6,6 +6,7 @@ import JSZip from "jszip";
 export const WORKSPACE_LIMITS = {
   previewTextBytes: 512 * 1024,
   previewImageBytes: 4 * 1024 * 1024,
+  previewPdfBytes: 12 * 1024 * 1024,
   contentSearchBytes: 256 * 1024,
   searchResults: 200,
   zipInputBytes: 64 * 1024 * 1024,
@@ -26,12 +27,12 @@ export interface WorkspaceFileEntry {
 export interface FilePreview {
   path: string;
   name: string;
-  kind: "directory" | "markdown" | "code" | "text" | "image" | "binary";
+  kind: "directory" | "markdown" | "code" | "text" | "image" | "pdf" | "binary";
   mimeType: string | null;
   sizeBytes: number;
   truncated: boolean;
   content: string | null;
-  imageDataUrl: string | null;
+  previewDataUrl: string | null;
   language: string | null;
 }
 
@@ -100,6 +101,11 @@ const IMAGE_MIME_TYPES = new Map<string, string>([
   [".png", "image/png"],
   [".svg", "image/svg+xml"],
   [".webp", "image/webp"],
+]);
+const PDF_MIME_TYPE = "application/pdf";
+const SEARCH_IGNORED_DIRECTORY_NAMES = new Set([
+  ".git",
+  "node_modules",
 ]);
 const CODE_EXTENSIONS = new Set([
   ".astro",
@@ -268,14 +274,30 @@ export async function listDirectory(workspacePath: string, directoryPath = ""): 
     const fullPath = path.join(target.realPath, entry.name);
     const entryStat = await fs.lstat(fullPath);
     const relativePath = normalizeRelativePath(path.relative(target.root, fullPath));
-    const isDirectory = entry.isDirectory();
     const isSymlink = entryStat.isSymbolicLink();
+    let isDirectory = entry.isDirectory();
+    let sizeBytes: number | null = isDirectory ? null : entryStat.size;
+
+    if (isSymlink) {
+      try {
+        const realPath = await fs.realpath(fullPath);
+        const relative = path.relative(target.root, realPath);
+        if (!relative.startsWith("..") && !path.isAbsolute(relative)) {
+          const realStat = await fs.stat(realPath);
+          isDirectory = realStat.isDirectory();
+          sizeBytes = isDirectory ? null : realStat.size;
+        }
+      } catch {
+        sizeBytes = null;
+      }
+    }
+
     return {
       name: entry.name,
       path: relativePath,
       isDirectory,
       isSymlink,
-      sizeBytes: isDirectory ? null : entryStat.size,
+      sizeBytes,
       extension: isDirectory ? null : extensionFor(entry.name),
     };
   }));
@@ -311,12 +333,13 @@ export async function readFilePreview(workspacePath: string, filePath: string): 
       sizeBytes: 0,
       truncated: false,
       content: null,
-      imageDataUrl: null,
+      previewDataUrl: null,
       language: null,
     };
   }
 
   const sizeBytes = target.stat.size;
+  const isPdf = extension === ".pdf";
   const imageType = imageMimeType(extension);
   if (imageType) {
     if (sizeBytes > WORKSPACE_LIMITS.previewImageBytes) {
@@ -328,7 +351,7 @@ export async function readFilePreview(workspacePath: string, filePath: string): 
         sizeBytes,
         truncated: true,
         content: null,
-        imageDataUrl: null,
+        previewDataUrl: null,
         language: null,
       };
     }
@@ -341,7 +364,35 @@ export async function readFilePreview(workspacePath: string, filePath: string): 
       sizeBytes,
       truncated: false,
       content: null,
-      imageDataUrl: `data:${imageType};base64,${buffer.toString("base64")}`,
+      previewDataUrl: `data:${imageType};base64,${buffer.toString("base64")}`,
+      language: null,
+    };
+  }
+
+  if (isPdf) {
+    if (sizeBytes > WORKSPACE_LIMITS.previewPdfBytes) {
+      return {
+        path: normalizeRelativePath(filePath),
+        name: fileName,
+        kind: "pdf",
+        mimeType: PDF_MIME_TYPE,
+        sizeBytes,
+        truncated: true,
+        content: null,
+        previewDataUrl: null,
+        language: null,
+      };
+    }
+    const buffer = await fs.readFile(target.realPath);
+    return {
+      path: normalizeRelativePath(filePath),
+      name: fileName,
+      kind: "pdf",
+      mimeType: PDF_MIME_TYPE,
+      sizeBytes,
+      truncated: false,
+      content: null,
+      previewDataUrl: `data:${PDF_MIME_TYPE};base64,${buffer.toString("base64")}`,
       language: null,
     };
   }
@@ -357,7 +408,7 @@ export async function readFilePreview(workspacePath: string, filePath: string): 
       sizeBytes,
       truncated: false,
       content: null,
-      imageDataUrl: null,
+      previewDataUrl: null,
       language: null,
     };
   }
@@ -371,7 +422,7 @@ export async function readFilePreview(workspacePath: string, filePath: string): 
     sizeBytes,
     truncated: sizeBytes > WORKSPACE_LIMITS.previewTextBytes,
     content,
-    imageDataUrl: null,
+    previewDataUrl: null,
     language: languageFor(extension),
   };
 }
@@ -419,6 +470,7 @@ export async function searchWorkspace(
       const entries = await fs.readdir(currentAbsolutePath, { withFileTypes: true });
       for (const entry of entries) {
         if (truncated) return;
+        if (entry.isDirectory() && SEARCH_IGNORED_DIRECTORY_NAMES.has(entry.name)) continue;
         const nextRelative = normalizeRelativePath(path.join(currentRelativePath, entry.name));
         await walk(path.join(currentAbsolutePath, entry.name), nextRelative);
       }

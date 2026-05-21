@@ -23,24 +23,28 @@ afterEach(async () => {
 });
 
 describe("workspace browser plugin", () => {
-  it("declares the expected project sidebar and detail tab surfaces", () => {
+  it("declares the expected sidebar, page, and detail tab surfaces", () => {
     expect(manifest.capabilities).toEqual(expect.arrayContaining([
       "ui.sidebar.register",
+      "ui.page.register",
       "ui.detailTab.register",
       "projects.read",
       "project.workspaces.read",
     ]));
     expect(manifest.ui?.slots).toContainEqual(expect.objectContaining({
+      type: "sidebar",
+      displayName: "Workspace Files",
+    }));
+    expect(manifest.ui?.slots).toContainEqual(expect.objectContaining({
+      type: "page",
+      routePath: "workspace-files",
+    }));
+    expect(manifest.ui?.slots).toContainEqual(expect.objectContaining({
       type: "detailTab",
       entityTypes: ["project"],
     }));
-    expect(manifest.ui?.slots).toContainEqual(expect.objectContaining({
-      type: "projectSidebarItem",
-      displayName: "Workspace Files",
-      entityTypes: ["project"],
-    }));
     expect(manifest.ui?.slots).not.toContainEqual(expect.objectContaining({
-      type: "page",
+      type: "projectSidebarItem",
     }));
   });
 

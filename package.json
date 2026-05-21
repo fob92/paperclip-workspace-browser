@@ -1,0 +1,68 @@
+{
+  "name": "paperclip-workspace-browser",
+  "version": "0.1.0",
+  "description": "Full workspace file browser for Paperclip project workspaces.",
+  "type": "module",
+  "private": false,
+  "license": "MIT",
+  "author": "Felix Oberdorf",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fob92/paperclip-workspace-browser.git"
+  },
+  "homepage": "https://github.com/fob92/paperclip-workspace-browser#readme",
+  "bugs": {
+    "url": "https://github.com/fob92/paperclip-workspace-browser/issues"
+  },
+  "keywords": [
+    "paperclip",
+    "plugin",
+    "workspace",
+    "file-browser"
+  ],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "paperclipPlugin": {
+    "manifest": "./dist/manifest.js",
+    "worker": "./dist/worker.js",
+    "ui": "./dist/ui/"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node ./scripts/build-ui.mjs",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "test": "vitest run",
+    "validate": "npm run typecheck && npm test && npm run build && npm pack --dry-run >/dev/null"
+  },
+  "dependencies": {
+    "@paperclipai/plugin-sdk": "2026.517.0",
+    "jszip": "^3.10.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.6.0",
+    "@types/react": "^19.0.8",
+    "@types/react-dom": "^19.0.3",
+    "esbuild": "^0.27.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.2.4"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  }
+}

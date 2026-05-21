@@ -1,7 +1,6 @@
 import type {
   FileTreeNode,
   PluginPageProps,
-  PluginProjectSidebarItemProps,
   PluginSidebarProps,
 } from "@paperclipai/plugin-sdk/ui";
 import {
@@ -19,6 +18,7 @@ import {
   useEffect,
   useMemo,
   useState,
+  type MouseEvent,
   type CSSProperties,
 } from "react";
 
@@ -152,6 +152,15 @@ function buildWorkspaceRoute(query: Partial<QueryState>) {
   return search ? `/workspace-files?${search}` : "/workspace-files";
 }
 
+function buildCompanyWorkspaceHref(
+  companyPrefix: string | null | undefined,
+  query: Partial<QueryState> = {},
+) {
+  const route = buildWorkspaceRoute(query);
+  const normalizedPrefix = typeof companyPrefix === "string" ? companyPrefix.trim().toUpperCase() : "";
+  return normalizedPrefix ? `/${normalizedPrefix}${route}` : route;
+}
+
 function parseQuery(search: string): QueryState {
   const params = new URLSearchParams(search);
   return {
@@ -205,6 +214,17 @@ async function copyToClipboard(value: string) {
   await navigator.clipboard.writeText(value);
 }
 
+function isPlainLeftClick(event: MouseEvent<HTMLAnchorElement>) {
+  return (
+    !event.defaultPrevented
+    && event.button === 0
+    && !event.metaKey
+    && !event.altKey
+    && !event.ctrlKey
+    && !event.shiftKey
+  );
+}
+
 function triggerDownload(payload: DownloadPayload) {
   const binary = atob(payload.base64);
   const bytes = new Uint8Array(binary.length);
@@ -221,42 +241,40 @@ function triggerDownload(payload: DownloadPayload) {
 }
 
 export function WorkspaceSidebarLink({ context }: PluginSidebarProps) {
-  const hostNavigation = useHostNavigation();
+  const href = buildCompanyWorkspaceHref(context.companyPrefix);
+  const isActive = typeof window !== "undefined" && window.location.pathname === new URL(href, window.location.origin).pathname;
+
+  function handleClick(event: MouseEvent<HTMLAnchorElement>) {
+    if (!isPlainLeftClick(event)) {
+      return;
+    }
+
+    event.preventDefault();
+    window.history.pushState({}, "", href);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }
+
   return (
     <a
-      {...hostNavigation.linkProps("/workspace-files")}
+      href={href}
+      onClick={handleClick}
+      aria-current={isActive ? "page" : undefined}
       style={{
         display: "flex",
         alignItems: "center",
         gap: "10px",
+        width: "100%",
         padding: "8px 12px",
+        borderRadius: "12px",
         textDecoration: "none",
         color: "inherit",
         fontSize: "13px",
         fontWeight: 600,
+        cursor: "pointer",
       }}
     >
       <span aria-hidden="true">Files</span>
       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Workspace Files</span>
-    </a>
-  );
-}
-
-export function ProjectWorkspaceFilesLink({ context }: PluginProjectSidebarItemProps) {
-  const hostNavigation = useHostNavigation();
-  const projectId = context.entityId;
-  return (
-    <a
-      {...hostNavigation.linkProps(buildWorkspaceRoute({ projectId }))}
-      style={{
-        display: "block",
-        padding: "6px 10px",
-        textDecoration: "none",
-        color: "inherit",
-        fontSize: "12px",
-      }}
-    >
-      Workspace Files
     </a>
   );
 }

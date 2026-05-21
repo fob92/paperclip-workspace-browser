@@ -3,7 +3,7 @@ import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 const manifest: PaperclipPluginManifestV1 = {
   id: "paperclip-workspace-browser",
   apiVersion: 1,
-  version: "0.1.0",
+  version: "0.1.1",
   displayName: "Workspace Browser",
   description: "Browse, search, preview, download, and export full Paperclip project workspaces.",
   author: "Felix Oberdorf",
@@ -33,14 +33,6 @@ const manifest: PaperclipPluginManifestV1 = {
         displayName: "Workspace Files",
         exportName: "WorkspaceBrowserPage",
         routePath: "workspace-files",
-      },
-      {
-        type: "projectSidebarItem",
-        id: "workspace-browser-project-link",
-        displayName: "Workspace Files",
-        exportName: "ProjectWorkspaceFilesLink",
-        entityTypes: ["project"],
-        order: 12,
       },
     ],
   },

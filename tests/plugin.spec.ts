@@ -38,6 +38,9 @@ describe("workspace browser plugin", () => {
       type: "sidebar",
       displayName: "Workspace Files",
     }));
+    expect(manifest.ui?.slots).not.toContainEqual(expect.objectContaining({
+      type: "projectSidebarItem",
+    }));
   });
 
   it("lists workspaces, previews files, searches content, and builds zip exports", async () => {

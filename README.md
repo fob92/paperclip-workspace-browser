@@ -19,6 +19,8 @@ It gives each company a `/workspace-files` page with:
 
 The page route is `/:companyPrefix/workspace-files`.
 
+This plugin intentionally uses a single company-level sidebar entry. Project selection happens inside the page so the sidebar does not get duplicated once per project.
+
 ## Local development
 
 ```bash

@@ -23,7 +23,7 @@ afterEach(async () => {
 });
 
 describe("workspace browser plugin", () => {
-  it("declares the expected sidebar launcher, page, and detail tab surfaces", () => {
+  it("declares the expected sidebar, page, and detail tab surfaces", () => {
     expect(manifest.capabilities).toEqual(expect.arrayContaining([
       "ui.sidebar.register",
       "ui.page.register",
@@ -31,13 +31,9 @@ describe("workspace browser plugin", () => {
       "projects.read",
       "project.workspaces.read",
     ]));
-    expect(manifest.ui?.launchers).toContainEqual(expect.objectContaining({
-      placementZone: "sidebar",
+    expect(manifest.ui?.slots).toContainEqual(expect.objectContaining({
+      type: "sidebar",
       displayName: "Workspace Files",
-      action: expect.objectContaining({
-        type: "navigate",
-        target: "plugins/paperclip-workspace-browser",
-      }),
     }));
     expect(manifest.ui?.slots).toContainEqual(expect.objectContaining({
       type: "page",
@@ -46,9 +42,6 @@ describe("workspace browser plugin", () => {
     expect(manifest.ui?.slots).toContainEqual(expect.objectContaining({
       type: "detailTab",
       entityTypes: ["project"],
-    }));
-    expect(manifest.ui?.slots).not.toContainEqual(expect.objectContaining({
-      type: "sidebar",
     }));
     expect(manifest.ui?.slots).not.toContainEqual(expect.objectContaining({
       type: "projectSidebarItem",

@@ -1,7 +1,6 @@
 import type {
   PluginDetailTabProps,
   PluginPageProps,
-  PluginSidebarProps,
 } from "@paperclipai/plugin-sdk/ui";
 import {
   useHostLocation,
@@ -87,6 +86,9 @@ type TreeNode = {
   children: TreeNode[];
 };
 
+const pluginId = "paperclip-workspace-browser";
+const workspaceRoutePath = "workspace-files";
+
 type FileTreePanelProps = {
   checkedPaths: Set<string>;
   emptyDescription: string;
@@ -161,12 +163,29 @@ const previewTextStyle: CSSProperties = {
   fontFamily: "inherit",
 };
 
-function buildWorkspaceRoute(query: Partial<QueryState>) {
+function resolveWorkspaceBasePath(pathname: string) {
+  const segments = pathname.split("/").filter(Boolean);
+  const lastSegment = segments.at(-1);
+  const secondLastSegment = segments.at(-2);
+
+  if (secondLastSegment === "plugins" && lastSegment === pluginId) {
+    return `/${segments.join("/")}`;
+  }
+
+  if (lastSegment === workspaceRoutePath) {
+    return `/${segments.join("/")}`;
+  }
+
+  return `/${workspaceRoutePath}`;
+}
+
+function buildWorkspaceRoute(pathname: string, query: Partial<QueryState>) {
+  const basePath = resolveWorkspaceBasePath(pathname);
   const params = new URLSearchParams();
   if (query.projectId) params.set("projectId", query.projectId);
   if (query.workspaceId) params.set("workspaceId", query.workspaceId);
   const search = params.toString();
-  return search ? `/workspace-files?${search}` : "/workspace-files";
+  return search ? `${basePath}?${search}` : basePath;
 }
 
 function parseQuery(search: string): QueryState {
@@ -978,38 +997,6 @@ function WorkspaceBrowserCore({
   );
 }
 
-export function WorkspaceSidebarLink({ context }: PluginSidebarProps) {
-  const hostNavigation = useHostNavigation();
-  const location = useHostLocation();
-  const href = hostNavigation.resolveHref("/workspace-files");
-  const isActive = location.pathname.split("/").filter(Boolean).at(-1) === "workspace-files";
-  const companyLabel = context.companyPrefix ? `/${context.companyPrefix}` : "company";
-
-  return (
-    <a
-      {...hostNavigation.linkProps("/workspace-files")}
-      aria-current={isActive ? "page" : undefined}
-      title={`${companyLabel} workspace browser`}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "10px",
-        padding: "8px 12px",
-        borderRadius: "12px",
-        textDecoration: "none",
-        color: "inherit",
-        fontSize: "13px",
-        fontWeight: isActive ? 700 : 600,
-        background: isActive ? "color-mix(in srgb, var(--accent) 18%, transparent)" : "transparent",
-      }}
-      data-href={href}
-    >
-      <span aria-hidden="true">Files</span>
-      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Workspace Files</span>
-    </a>
-  );
-}
-
 export function WorkspaceBrowserPage({ context }: PluginPageProps) {
   const hostNavigation = useHostNavigation();
   const location = useHostLocation();
@@ -1029,9 +1016,9 @@ export function WorkspaceBrowserPage({ context }: PluginPageProps) {
   useEffect(() => {
     if (projects.length === 0) return;
     if (!query.projectId || !queriedProjectExists) {
-      hostNavigation.navigate(buildWorkspaceRoute({ projectId: projects[0]!.id }), { replace: true });
+      hostNavigation.navigate(buildWorkspaceRoute(location.pathname, { projectId: projects[0]!.id }), { replace: true });
     }
-  }, [hostNavigation, projects, query.projectId, queriedProjectExists]);
+  }, [hostNavigation, location.pathname, projects, query.projectId, queriedProjectExists]);
 
   useEffect(() => {
     setSelectedFile(null);
@@ -1050,7 +1037,7 @@ export function WorkspaceBrowserPage({ context }: PluginPageProps) {
             style={inputStyle}
             onChange={(event) => {
               const nextProjectId = event.target.value || null;
-              hostNavigation.navigate(buildWorkspaceRoute({ projectId: nextProjectId }), { replace: false });
+              hostNavigation.navigate(buildWorkspaceRoute(location.pathname, { projectId: nextProjectId }), { replace: false });
             }}
           >
             {projectsResult.loading ? <option value="">Loading projects…</option> : null}
@@ -1067,7 +1054,7 @@ export function WorkspaceBrowserPage({ context }: PluginPageProps) {
       onSelectedFileChange={setSelectedFile}
       workspaceId={query.workspaceId}
       onWorkspaceIdChange={(nextWorkspaceId) => {
-        hostNavigation.navigate(buildWorkspaceRoute({
+        hostNavigation.navigate(buildWorkspaceRoute(location.pathname, {
           projectId: effectiveProjectId,
           workspaceId: nextWorkspaceId,
         }), { replace: true });

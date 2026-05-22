@@ -4,6 +4,7 @@ import type {
   PluginSidebarProps,
 } from "@paperclipai/plugin-sdk/ui";
 import {
+  useHostNavigation,
   usePluginAction,
   usePluginData,
   usePluginToast,
@@ -194,6 +195,21 @@ function buildCompanyWorkspaceHref(
   const route = buildWorkspaceRoute(`/${workspaceRoutePath}`, query);
   const normalizedPrefix = typeof companyPrefix === "string" ? companyPrefix.trim().toUpperCase() : "";
   return normalizedPrefix ? `/${normalizedPrefix}${route}` : route;
+}
+
+function buildPluginPageHref(
+  companyPrefix: string | null | undefined,
+  query: Partial<QueryState> = {},
+) {
+  const normalizedPrefix = typeof companyPrefix === "string" ? companyPrefix.trim().toUpperCase() : "";
+  const basePath = normalizedPrefix
+    ? `/${normalizedPrefix}/plugins/${pluginId}`
+    : `/plugins/${pluginId}`;
+  const params = new URLSearchParams();
+  if (query.projectId) params.set("projectId", query.projectId);
+  if (query.workspaceId) params.set("workspaceId", query.workspaceId);
+  const search = params.toString();
+  return search ? `${basePath}?${search}` : basePath;
 }
 
 function parseQuery(search: string): QueryState {
@@ -1016,12 +1032,16 @@ function WorkspaceBrowserCore({
 }
 
 export function WorkspaceSidebarLink({ context }: PluginSidebarProps) {
-  const href = buildCompanyWorkspaceHref(context.companyPrefix);
-  const isActive = typeof window !== "undefined" && window.location.pathname === href;
+  const hostNavigation = useHostNavigation();
+  const href = buildPluginPageHref(context.companyPrefix);
+  const legacyHref = buildCompanyWorkspaceHref(context.companyPrefix);
+  const isActive = typeof window !== "undefined" && (
+    window.location.pathname === href || window.location.pathname === legacyHref
+  );
 
   return (
     <a
-      href={href}
+      {...hostNavigation.linkProps(href)}
       aria-current={isActive ? "page" : undefined}
       style={{
         display: "flex",

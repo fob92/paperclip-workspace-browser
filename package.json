@@ -1,6 +1,6 @@
 {
   "name": "paperclip-workspace-browser",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "Full workspace file browser for Paperclip project workspaces.",
   "type": "module",
   "private": false,

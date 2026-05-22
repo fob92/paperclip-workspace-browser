@@ -1225,14 +1225,27 @@ function currentCompanyPrefix() {
   return first ? first.toUpperCase() : null;
 }
 
-async function resolveCompanyId() {
-  const companies = await hostFetchJson<CompanyRecord[]>("/api/companies");
-  const prefix = currentCompanyPrefix();
-  if (prefix) {
-    const matched = companies.find((company) => (company.issuePrefix ?? "").trim().toUpperCase() === prefix);
-    if (matched?.id) return matched.id;
+async function resolveCompanyId(): Promise<string | null> {
+  // Prefer localStorage value set by the Paperclip host – avoids any privileged API call
+  if (typeof window !== "undefined") {
+    const stored = window.localStorage.getItem("paperclip.selectedCompanyId");
+    const trimmed = stored?.trim();
+    if (trimmed) return trimmed;
   }
-  return companies[0]?.id ?? null;
+
+  // Fall back to the companies API, but gracefully absorb auth errors (401/403)
+  try {
+    const companies = await hostFetchJson<CompanyRecord[]>("/api/companies");
+    const prefix = currentCompanyPrefix();
+    if (prefix) {
+      const matched = companies.find((company) => (company.issuePrefix ?? "").trim().toUpperCase() === prefix);
+      if (matched?.id) return matched.id;
+    }
+    return companies[0]?.id ?? null;
+  } catch (err) {
+    console.warn("[workspace-browser] GET /api/companies failed; company context unavailable.", err);
+    return null;
+  }
 }
 
 function StandalonePreview({ preview }: { preview: Exclude<PreviewRecord, null> }) {
@@ -1308,11 +1321,14 @@ function StandaloneWorkspaceBrowser() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      try {
-        const nextCompanyId = await resolveCompanyId();
-        if (!cancelled) setCompanyId(nextCompanyId);
-      } catch (nextError) {
-        if (!cancelled) setError(nextError instanceof Error ? nextError.message : String(nextError));
+      const nextCompanyId = await resolveCompanyId();
+      if (!cancelled) {
+        setCompanyId(nextCompanyId);
+        if (nextCompanyId === null) {
+          setError(
+            "Unable to resolve company context. Please ensure you are logged in to Paperclip and have selected a company, then refresh the page.",
+          );
+        }
       }
     })();
     return () => {
@@ -1515,7 +1531,7 @@ function StandaloneWorkspaceBrowser() {
             emptyTitle="No files"
             error={error}
             expandedPaths={expandedPaths}
-            loading={!companyId || !projectId || !workspaceId}
+            loading={error === null && (!companyId || !projectId || !workspaceId)}
             nodes={nodes}
             onSelectFile={setSelectedFile}
             onToggleCheck={() => undefined}
@@ -1550,7 +1566,9 @@ function StandaloneWorkspaceBrowser() {
 }
 
 function findExactTextElement(text: string) {
-  const candidates = Array.from(document.querySelectorAll<HTMLElement>("div, span, a, p"));
+  const candidates = Array.from(document.querySelectorAll<HTMLElement>(
+    "div, span, a, p, h1, h2, h3, h4, h5, h6, li, td, th",
+  ));
   return candidates.find((element) => element.textContent?.trim() === text) ?? null;
 }
 

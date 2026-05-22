@@ -17,6 +17,7 @@ await esbuild.build({
   external: [
     "react",
     "react-dom",
+    "react-dom/client",
     "react/jsx-runtime",
     "@paperclipai/plugin-sdk/ui",
   ],

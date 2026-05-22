@@ -18,6 +18,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
+import { createRoot } from "react-dom/client";
 
 type ProjectRecord = {
   id: string;
@@ -1180,3 +1181,438 @@ export function WorkspaceBrowserTab({ context }: PluginDetailTabProps) {
     />
   );
 }
+
+type CompanyRecord = {
+  id: string;
+  issuePrefix?: string | null;
+  name?: string | null;
+};
+
+async function hostFetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, {
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+      ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...(init?.headers ?? {}),
+    },
+    ...init,
+  });
+
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+
+  return await response.json() as T;
+}
+
+async function hostGetData<T>(key: string, params: Record<string, unknown>): Promise<T> {
+  const response = await hostFetchJson<{ data: T }>(
+    `/api/plugins/${pluginId}/data/${encodeURIComponent(key)}`,
+    {
+      method: "POST",
+      body: JSON.stringify({ params }),
+    },
+  );
+  return response.data;
+}
+
+function currentCompanyPrefix() {
+  if (typeof window === "undefined") return null;
+  const segments = window.location.pathname.split("/").filter(Boolean);
+  if (segments.length === 0) return null;
+  const first = segments[0]?.trim();
+  return first ? first.toUpperCase() : null;
+}
+
+async function resolveCompanyId() {
+  const companies = await hostFetchJson<CompanyRecord[]>("/api/companies");
+  const prefix = currentCompanyPrefix();
+  if (prefix) {
+    const matched = companies.find((company) => (company.issuePrefix ?? "").trim().toUpperCase() === prefix);
+    if (matched?.id) return matched.id;
+  }
+  return companies[0]?.id ?? null;
+}
+
+function StandalonePreview({ preview }: { preview: Exclude<PreviewRecord, null> }) {
+  if (preview.kind === "markdown") {
+    return <pre style={previewTextStyle}>{preview.content ?? ""}</pre>;
+  }
+
+  if (preview.kind === "image") {
+    return preview.previewDataUrl ? (
+      <div style={{ borderTop: "1px solid var(--border)", paddingTop: "16px" }}>
+        <img
+          src={preview.previewDataUrl}
+          alt={preview.name}
+          style={{ maxWidth: "100%", borderRadius: "12px", display: "block" }}
+        />
+      </div>
+    ) : (
+      <div style={mutedTextStyle}>Image preview unavailable for this file.</div>
+    );
+  }
+
+  if (preview.kind === "pdf") {
+    return preview.previewDataUrl ? (
+      <div style={{ borderTop: "1px solid var(--border)", paddingTop: "16px" }}>
+        <iframe
+          src={preview.previewDataUrl}
+          title={preview.name}
+          style={{
+            width: "100%",
+            minHeight: "70vh",
+            border: "1px solid var(--border)",
+            borderRadius: "12px",
+            background: "white",
+          }}
+        />
+      </div>
+    ) : (
+      <div style={mutedTextStyle}>PDF preview unavailable for this file.</div>
+    );
+  }
+
+  if (preview.kind === "code" || preview.kind === "text") {
+    return <pre style={codeBlockStyle}>{preview.content ?? ""}</pre>;
+  }
+
+  if (preview.kind === "binary") {
+    return <div style={mutedTextStyle}>Binary file, preview unavailable.</div>;
+  }
+
+  if (preview.kind === "directory") {
+    return <div style={mutedTextStyle}>Directories are browsed in the tree.</div>;
+  }
+
+  return <div style={mutedTextStyle}>Preview unavailable.</div>;
+}
+
+function StandaloneWorkspaceBrowser() {
+  const isCompactLayout = useMediaQuery("(max-width: 960px)");
+  const [companyId, setCompanyId] = useState<string | null>(null);
+  const [projects, setProjects] = useState<ProjectRecord[]>([]);
+  const [workspaces, setWorkspaces] = useState<WorkspaceRecord[]>([]);
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [nodes, setNodes] = useState<TreeNode[]>([]);
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
+  const [loadedDirs, setLoadedDirs] = useState<Set<string>>(new Set([""]));
+  const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [preview, setPreview] = useState<PreviewRecord>(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const nextCompanyId = await resolveCompanyId();
+        if (!cancelled) setCompanyId(nextCompanyId);
+      } catch (nextError) {
+        if (!cancelled) setError(nextError instanceof Error ? nextError.message : String(nextError));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!companyId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const data = await hostGetData<ProjectRecord[]>("projects", { companyId });
+        if (cancelled) return;
+        setProjects(data);
+        setProjectId((current) => current && data.some((project) => project.id === current) ? current : (data[0]?.id ?? null));
+      } catch (nextError) {
+        if (!cancelled) setError(nextError instanceof Error ? nextError.message : String(nextError));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId]);
+
+  useEffect(() => {
+    if (!companyId || !projectId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const data = await hostGetData<WorkspaceRecord[]>("project-workspaces", { companyId, projectId });
+        if (cancelled) return;
+        setWorkspaces(data);
+        const nextWorkspaceId = data.find((workspace) => workspace.id === workspaceId)?.id ?? data[0]?.id ?? null;
+        setWorkspaceId(nextWorkspaceId);
+      } catch (nextError) {
+        if (!cancelled) setError(nextError instanceof Error ? nextError.message : String(nextError));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, projectId]);
+
+  useEffect(() => {
+    if (!companyId || !projectId || !workspaceId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const data = await hostGetData<{ entries: FileEntry[] }>("file-list", {
+          companyId,
+          projectId,
+          workspaceId,
+          directoryPath: "",
+        });
+        if (cancelled) return;
+        setNodes(fileTreeNodes(data.entries ?? []));
+        setExpandedPaths(new Set());
+        setLoadedDirs(new Set([""]));
+        setLoadingDirs(new Set());
+        setSelectedFile(null);
+        setPreview(null);
+      } catch (nextError) {
+        if (!cancelled) setError(nextError instanceof Error ? nextError.message : String(nextError));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, projectId, workspaceId]);
+
+  useEffect(() => {
+    if (!companyId || !projectId || !workspaceId || !selectedFile) {
+      setPreview(null);
+      return;
+    }
+    let cancelled = false;
+    setLoadingPreview(true);
+    void (async () => {
+      try {
+        const data = await hostGetData<PreviewRecord>("file-preview", {
+          companyId,
+          projectId,
+          workspaceId,
+          filePath: selectedFile,
+        });
+        if (!cancelled) setPreview(data);
+      } catch (nextError) {
+        if (!cancelled) setError(nextError instanceof Error ? nextError.message : String(nextError));
+      } finally {
+        if (!cancelled) setLoadingPreview(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, projectId, workspaceId, selectedFile]);
+
+  async function handleToggleDir(dirPath: string) {
+    setExpandedPaths((current) => {
+      const next = new Set(current);
+      if (next.has(dirPath)) next.delete(dirPath);
+      else next.add(dirPath);
+      return next;
+    });
+
+    if (!companyId || !projectId || !workspaceId) return;
+    if (loadedDirs.has(dirPath) || loadingDirs.has(dirPath)) return;
+
+    setLoadingDirs((current) => new Set(current).add(dirPath));
+    try {
+      const data = await hostGetData<{ entries: FileEntry[] }>("file-list", {
+        companyId,
+        projectId,
+        workspaceId,
+        directoryPath: dirPath,
+      });
+      setNodes((current) => setChildrenAtPath(current, dirPath, fileTreeNodes(data.entries ?? [])));
+      setLoadedDirs((current) => new Set(current).add(dirPath));
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setLoadingDirs((current) => {
+        const next = new Set(current);
+        next.delete(dirPath);
+        return next;
+      });
+    }
+  }
+
+  const projectName = projects.find((project) => project.id === projectId)?.name ?? null;
+  const workspaceLabelValue = workspaces.find((workspace) => workspace.id === workspaceId)?.label ?? null;
+
+  return (
+    <main
+      style={{
+        display: "grid",
+        gap: "16px",
+        padding: isCompactLayout ? "14px" : "18px",
+        color: "inherit",
+        width: "100%",
+      }}
+    >
+      <section
+        style={{
+          ...cardStyle,
+          padding: "18px",
+          background:
+            "linear-gradient(135deg, color-mix(in srgb, var(--accent) 22%, transparent), color-mix(in srgb, var(--card, transparent) 90%, transparent))",
+        }}
+      >
+        <div style={{ display: "grid", gap: "12px" }}>
+          <div style={{ display: "grid", gap: "4px" }}>
+            <div style={{ fontSize: "12px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--muted-foreground)" }}>
+              Workspace Access
+            </div>
+            <h1 style={{ margin: 0, fontSize: isCompactLayout ? "24px" : "28px", lineHeight: 1.1 }}>Workspace Files</h1>
+            <div style={mutedTextStyle}>Plugin self-render fallback active while the host slot loader is broken.</div>
+            {projectName ? <div style={mutedTextStyle}>Project: <strong style={{ color: "inherit" }}>{projectName}</strong></div> : null}
+            {workspaceLabelValue ? <div style={mutedTextStyle}>Workspace: <strong style={{ color: "inherit" }}>{workspaceLabelValue}</strong></div> : null}
+          </div>
+          <div style={{ display: "grid", gap: "10px", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))" }}>
+            <label style={{ display: "grid", gap: "6px" }}>
+              <span style={mutedTextStyle}>Project</span>
+              <select value={projectId ?? ""} style={inputStyle} onChange={(event) => setProjectId(event.target.value || null)}>
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id}>{project.name}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: "grid", gap: "6px" }}>
+              <span style={mutedTextStyle}>Workspace</span>
+              <select value={workspaceId ?? ""} style={inputStyle} onChange={(event) => setWorkspaceId(event.target.value || null)}>
+                {workspaces.map((workspace) => (
+                  <option key={workspace.id} value={workspace.id}>{workspace.label}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {error ? <div style={{ ...mutedTextStyle, color: "var(--destructive, #c00)" }}>{error}</div> : null}
+        </div>
+      </section>
+
+      <section
+        style={{
+          display: "grid",
+          gap: "16px",
+          gridTemplateColumns: isCompactLayout ? "minmax(0, 1fr)" : "minmax(260px, 340px) minmax(0, 1fr)",
+          alignItems: "start",
+        }}
+      >
+        <section style={sectionStyle}>
+          <div>
+            <strong>Tree</strong>
+            <div style={mutedTextStyle}>Browse the project workspace directly from the plugin bundle.</div>
+          </div>
+          <FileTreePanel
+            checkedPaths={new Set()}
+            emptyDescription="This workspace does not expose any readable files yet."
+            emptyTitle="No files"
+            error={error}
+            expandedPaths={expandedPaths}
+            loading={!companyId || !projectId || !workspaceId}
+            nodes={nodes}
+            onSelectFile={setSelectedFile}
+            onToggleCheck={() => undefined}
+            onToggleDir={(nextPath) => void handleToggleDir(nextPath)}
+            selectedFile={selectedFile}
+          />
+        </section>
+
+        <section style={sectionStyle}>
+          <div style={{ display: "grid", gap: "4px" }}>
+            <strong>{fileDisplayName(selectedFile)}</strong>
+            <span style={mutedTextStyle}>{selectedFile ?? "Select a file to preview it."}</span>
+          </div>
+          {loadingPreview ? (
+            <div style={mutedTextStyle}>Loading preview…</div>
+          ) : preview ? (
+            <>
+              <StandalonePreview preview={preview} />
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "10px" }}>
+                <span style={mutedTextStyle}>Size: {formatBytes(preview.sizeBytes)}</span>
+                {preview.language ? <span style={mutedTextStyle}>Language: {preview.language}</span> : null}
+                {preview.truncated ? <span style={mutedTextStyle}>Preview truncated</span> : null}
+              </div>
+            </>
+          ) : (
+            <div style={mutedTextStyle}>Select a file to preview Markdown, code, text, images, or PDFs.</div>
+          )}
+        </section>
+      </section>
+    </main>
+  );
+}
+
+function findExactTextElement(text: string) {
+  const candidates = Array.from(document.querySelectorAll<HTMLElement>("div, span, a, p"));
+  return candidates.find((element) => element.textContent?.trim() === text) ?? null;
+}
+
+function mountStandaloneWorkspaceBrowser() {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+  const placeholder = findExactTextElement("Workspace Browser: Workspace Files");
+  if (!placeholder) return;
+
+  const mountNode = placeholder.parentElement ?? placeholder;
+  if (mountNode.dataset.workspaceBrowserStandaloneMounted === "true") return;
+
+  mountNode.dataset.workspaceBrowserStandaloneMounted = "true";
+  mountNode.innerHTML = "";
+  createRoot(mountNode).render(<StandaloneWorkspaceBrowser />);
+}
+
+function replaceSidebarPlaceholderWithLink() {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+  const placeholders = Array.from(document.querySelectorAll<HTMLElement>("div, span"))
+    .filter((element) => element.textContent?.trim() === "Workspace Browser: Workspace Files");
+
+  for (const element of placeholders) {
+    if (element.closest("[data-workspace-browser-standalone-mounted='true']")) continue;
+    const wrapper = element.parentElement ?? element;
+    if ((wrapper.textContent ?? "").includes("Back")) continue;
+    if (wrapper.dataset.workspaceBrowserSidebarLinked === "true") continue;
+    wrapper.dataset.workspaceBrowserSidebarLinked = "true";
+    wrapper.innerHTML = "";
+    const link = document.createElement("a");
+    link.href = buildCompanyWorkspaceHref(currentCompanyPrefix());
+    link.textContent = "Workspace Files";
+    Object.assign(link.style, {
+      display: "flex",
+      alignItems: "center",
+      gap: "10px",
+      width: "100%",
+      padding: "8px 12px",
+      textDecoration: "none",
+      color: "inherit",
+      fontSize: "13px",
+      fontWeight: "600",
+      cursor: "pointer",
+    });
+    wrapper.appendChild(link);
+  }
+}
+
+function bootstrapStandaloneFallback() {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+
+  const sync = () => {
+    const path = window.location.pathname;
+    if (path.endsWith("/workspace-files")) {
+      mountStandaloneWorkspaceBrowser();
+    } else {
+      replaceSidebarPlaceholderWithLink();
+    }
+  };
+
+  sync();
+  const observer = new MutationObserver(() => sync());
+  observer.observe(document.body, { childList: true, subtree: true });
+}
+
+bootstrapStandaloneFallback();

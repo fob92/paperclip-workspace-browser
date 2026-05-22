@@ -12,7 +12,8 @@ import {
   useMemo,
   useState
 } from "react";
-import { jsx, jsxs } from "react/jsx-runtime";
+import { createRoot } from "react-dom/client";
+import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 var pluginId = "paperclip-workspace-browser";
 var workspaceRoutePath = "workspace-files";
 var cardStyle = {
@@ -970,6 +971,398 @@ function WorkspaceBrowserTab({ context }) {
     }
   );
 }
+async function hostFetchJson(url, init) {
+  const response = await fetch(url, {
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+      ...init?.body ? { "Content-Type": "application/json" } : {},
+      ...init?.headers ?? {}
+    },
+    ...init
+  });
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+  return await response.json();
+}
+async function hostGetData(key, params) {
+  const response = await hostFetchJson(
+    `/api/plugins/${pluginId}/data/${encodeURIComponent(key)}`,
+    {
+      method: "POST",
+      body: JSON.stringify({ params })
+    }
+  );
+  return response.data;
+}
+function currentCompanyPrefix() {
+  if (typeof window === "undefined") return null;
+  const segments = window.location.pathname.split("/").filter(Boolean);
+  if (segments.length === 0) return null;
+  const first = segments[0]?.trim();
+  return first ? first.toUpperCase() : null;
+}
+async function resolveCompanyId() {
+  const companies = await hostFetchJson("/api/companies");
+  const prefix = currentCompanyPrefix();
+  if (prefix) {
+    const matched = companies.find((company) => (company.issuePrefix ?? "").trim().toUpperCase() === prefix);
+    if (matched?.id) return matched.id;
+  }
+  return companies[0]?.id ?? null;
+}
+function StandalonePreview({ preview }) {
+  if (preview.kind === "markdown") {
+    return /* @__PURE__ */ jsx("pre", { style: previewTextStyle, children: preview.content ?? "" });
+  }
+  if (preview.kind === "image") {
+    return preview.previewDataUrl ? /* @__PURE__ */ jsx("div", { style: { borderTop: "1px solid var(--border)", paddingTop: "16px" }, children: /* @__PURE__ */ jsx(
+      "img",
+      {
+        src: preview.previewDataUrl,
+        alt: preview.name,
+        style: { maxWidth: "100%", borderRadius: "12px", display: "block" }
+      }
+    ) }) : /* @__PURE__ */ jsx("div", { style: mutedTextStyle, children: "Image preview unavailable for this file." });
+  }
+  if (preview.kind === "pdf") {
+    return preview.previewDataUrl ? /* @__PURE__ */ jsx("div", { style: { borderTop: "1px solid var(--border)", paddingTop: "16px" }, children: /* @__PURE__ */ jsx(
+      "iframe",
+      {
+        src: preview.previewDataUrl,
+        title: preview.name,
+        style: {
+          width: "100%",
+          minHeight: "70vh",
+          border: "1px solid var(--border)",
+          borderRadius: "12px",
+          background: "white"
+        }
+      }
+    ) }) : /* @__PURE__ */ jsx("div", { style: mutedTextStyle, children: "PDF preview unavailable for this file." });
+  }
+  if (preview.kind === "code" || preview.kind === "text") {
+    return /* @__PURE__ */ jsx("pre", { style: codeBlockStyle, children: preview.content ?? "" });
+  }
+  if (preview.kind === "binary") {
+    return /* @__PURE__ */ jsx("div", { style: mutedTextStyle, children: "Binary file, preview unavailable." });
+  }
+  if (preview.kind === "directory") {
+    return /* @__PURE__ */ jsx("div", { style: mutedTextStyle, children: "Directories are browsed in the tree." });
+  }
+  return /* @__PURE__ */ jsx("div", { style: mutedTextStyle, children: "Preview unavailable." });
+}
+function StandaloneWorkspaceBrowser() {
+  const isCompactLayout = useMediaQuery("(max-width: 960px)");
+  const [companyId, setCompanyId] = useState(null);
+  const [projects, setProjects] = useState([]);
+  const [workspaces, setWorkspaces] = useState([]);
+  const [projectId, setProjectId] = useState(null);
+  const [workspaceId, setWorkspaceId] = useState(null);
+  const [nodes, setNodes] = useState([]);
+  const [expandedPaths, setExpandedPaths] = useState(/* @__PURE__ */ new Set());
+  const [loadedDirs, setLoadedDirs] = useState(/* @__PURE__ */ new Set([""]));
+  const [loadingDirs, setLoadingDirs] = useState(/* @__PURE__ */ new Set());
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const nextCompanyId = await resolveCompanyId();
+        if (!cancelled) setCompanyId(nextCompanyId);
+      } catch (nextError) {
+        if (!cancelled) setError(nextError instanceof Error ? nextError.message : String(nextError));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(() => {
+    if (!companyId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const data = await hostGetData("projects", { companyId });
+        if (cancelled) return;
+        setProjects(data);
+        setProjectId((current) => current && data.some((project) => project.id === current) ? current : data[0]?.id ?? null);
+      } catch (nextError) {
+        if (!cancelled) setError(nextError instanceof Error ? nextError.message : String(nextError));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId]);
+  useEffect(() => {
+    if (!companyId || !projectId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const data = await hostGetData("project-workspaces", { companyId, projectId });
+        if (cancelled) return;
+        setWorkspaces(data);
+        const nextWorkspaceId = data.find((workspace) => workspace.id === workspaceId)?.id ?? data[0]?.id ?? null;
+        setWorkspaceId(nextWorkspaceId);
+      } catch (nextError) {
+        if (!cancelled) setError(nextError instanceof Error ? nextError.message : String(nextError));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, projectId]);
+  useEffect(() => {
+    if (!companyId || !projectId || !workspaceId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const data = await hostGetData("file-list", {
+          companyId,
+          projectId,
+          workspaceId,
+          directoryPath: ""
+        });
+        if (cancelled) return;
+        setNodes(fileTreeNodes(data.entries ?? []));
+        setExpandedPaths(/* @__PURE__ */ new Set());
+        setLoadedDirs(/* @__PURE__ */ new Set([""]));
+        setLoadingDirs(/* @__PURE__ */ new Set());
+        setSelectedFile(null);
+        setPreview(null);
+      } catch (nextError) {
+        if (!cancelled) setError(nextError instanceof Error ? nextError.message : String(nextError));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, projectId, workspaceId]);
+  useEffect(() => {
+    if (!companyId || !projectId || !workspaceId || !selectedFile) {
+      setPreview(null);
+      return;
+    }
+    let cancelled = false;
+    setLoadingPreview(true);
+    void (async () => {
+      try {
+        const data = await hostGetData("file-preview", {
+          companyId,
+          projectId,
+          workspaceId,
+          filePath: selectedFile
+        });
+        if (!cancelled) setPreview(data);
+      } catch (nextError) {
+        if (!cancelled) setError(nextError instanceof Error ? nextError.message : String(nextError));
+      } finally {
+        if (!cancelled) setLoadingPreview(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, projectId, workspaceId, selectedFile]);
+  async function handleToggleDir(dirPath) {
+    setExpandedPaths((current) => {
+      const next = new Set(current);
+      if (next.has(dirPath)) next.delete(dirPath);
+      else next.add(dirPath);
+      return next;
+    });
+    if (!companyId || !projectId || !workspaceId) return;
+    if (loadedDirs.has(dirPath) || loadingDirs.has(dirPath)) return;
+    setLoadingDirs((current) => new Set(current).add(dirPath));
+    try {
+      const data = await hostGetData("file-list", {
+        companyId,
+        projectId,
+        workspaceId,
+        directoryPath: dirPath
+      });
+      setNodes((current) => setChildrenAtPath(current, dirPath, fileTreeNodes(data.entries ?? [])));
+      setLoadedDirs((current) => new Set(current).add(dirPath));
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setLoadingDirs((current) => {
+        const next = new Set(current);
+        next.delete(dirPath);
+        return next;
+      });
+    }
+  }
+  const projectName = projects.find((project) => project.id === projectId)?.name ?? null;
+  const workspaceLabelValue = workspaces.find((workspace) => workspace.id === workspaceId)?.label ?? null;
+  return /* @__PURE__ */ jsxs(
+    "main",
+    {
+      style: {
+        display: "grid",
+        gap: "16px",
+        padding: isCompactLayout ? "14px" : "18px",
+        color: "inherit",
+        width: "100%"
+      },
+      children: [
+        /* @__PURE__ */ jsx(
+          "section",
+          {
+            style: {
+              ...cardStyle,
+              padding: "18px",
+              background: "linear-gradient(135deg, color-mix(in srgb, var(--accent) 22%, transparent), color-mix(in srgb, var(--card, transparent) 90%, transparent))"
+            },
+            children: /* @__PURE__ */ jsxs("div", { style: { display: "grid", gap: "12px" }, children: [
+              /* @__PURE__ */ jsxs("div", { style: { display: "grid", gap: "4px" }, children: [
+                /* @__PURE__ */ jsx("div", { style: { fontSize: "12px", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--muted-foreground)" }, children: "Workspace Access" }),
+                /* @__PURE__ */ jsx("h1", { style: { margin: 0, fontSize: isCompactLayout ? "24px" : "28px", lineHeight: 1.1 }, children: "Workspace Files" }),
+                /* @__PURE__ */ jsx("div", { style: mutedTextStyle, children: "Plugin self-render fallback active while the host slot loader is broken." }),
+                projectName ? /* @__PURE__ */ jsxs("div", { style: mutedTextStyle, children: [
+                  "Project: ",
+                  /* @__PURE__ */ jsx("strong", { style: { color: "inherit" }, children: projectName })
+                ] }) : null,
+                workspaceLabelValue ? /* @__PURE__ */ jsxs("div", { style: mutedTextStyle, children: [
+                  "Workspace: ",
+                  /* @__PURE__ */ jsx("strong", { style: { color: "inherit" }, children: workspaceLabelValue })
+                ] }) : null
+              ] }),
+              /* @__PURE__ */ jsxs("div", { style: { display: "grid", gap: "10px", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))" }, children: [
+                /* @__PURE__ */ jsxs("label", { style: { display: "grid", gap: "6px" }, children: [
+                  /* @__PURE__ */ jsx("span", { style: mutedTextStyle, children: "Project" }),
+                  /* @__PURE__ */ jsx("select", { value: projectId ?? "", style: inputStyle, onChange: (event) => setProjectId(event.target.value || null), children: projects.map((project) => /* @__PURE__ */ jsx("option", { value: project.id, children: project.name }, project.id)) })
+                ] }),
+                /* @__PURE__ */ jsxs("label", { style: { display: "grid", gap: "6px" }, children: [
+                  /* @__PURE__ */ jsx("span", { style: mutedTextStyle, children: "Workspace" }),
+                  /* @__PURE__ */ jsx("select", { value: workspaceId ?? "", style: inputStyle, onChange: (event) => setWorkspaceId(event.target.value || null), children: workspaces.map((workspace) => /* @__PURE__ */ jsx("option", { value: workspace.id, children: workspace.label }, workspace.id)) })
+                ] })
+              ] }),
+              error ? /* @__PURE__ */ jsx("div", { style: { ...mutedTextStyle, color: "var(--destructive, #c00)" }, children: error }) : null
+            ] })
+          }
+        ),
+        /* @__PURE__ */ jsxs(
+          "section",
+          {
+            style: {
+              display: "grid",
+              gap: "16px",
+              gridTemplateColumns: isCompactLayout ? "minmax(0, 1fr)" : "minmax(260px, 340px) minmax(0, 1fr)",
+              alignItems: "start"
+            },
+            children: [
+              /* @__PURE__ */ jsxs("section", { style: sectionStyle, children: [
+                /* @__PURE__ */ jsxs("div", { children: [
+                  /* @__PURE__ */ jsx("strong", { children: "Tree" }),
+                  /* @__PURE__ */ jsx("div", { style: mutedTextStyle, children: "Browse the project workspace directly from the plugin bundle." })
+                ] }),
+                /* @__PURE__ */ jsx(
+                  FileTreePanel,
+                  {
+                    checkedPaths: /* @__PURE__ */ new Set(),
+                    emptyDescription: "This workspace does not expose any readable files yet.",
+                    emptyTitle: "No files",
+                    error,
+                    expandedPaths,
+                    loading: !companyId || !projectId || !workspaceId,
+                    nodes,
+                    onSelectFile: setSelectedFile,
+                    onToggleCheck: () => void 0,
+                    onToggleDir: (nextPath) => void handleToggleDir(nextPath),
+                    selectedFile
+                  }
+                )
+              ] }),
+              /* @__PURE__ */ jsxs("section", { style: sectionStyle, children: [
+                /* @__PURE__ */ jsxs("div", { style: { display: "grid", gap: "4px" }, children: [
+                  /* @__PURE__ */ jsx("strong", { children: fileDisplayName(selectedFile) }),
+                  /* @__PURE__ */ jsx("span", { style: mutedTextStyle, children: selectedFile ?? "Select a file to preview it." })
+                ] }),
+                loadingPreview ? /* @__PURE__ */ jsx("div", { style: mutedTextStyle, children: "Loading preview\u2026" }) : preview ? /* @__PURE__ */ jsxs(Fragment, { children: [
+                  /* @__PURE__ */ jsx(StandalonePreview, { preview }),
+                  /* @__PURE__ */ jsxs("div", { style: { display: "flex", flexWrap: "wrap", gap: "10px" }, children: [
+                    /* @__PURE__ */ jsxs("span", { style: mutedTextStyle, children: [
+                      "Size: ",
+                      formatBytes(preview.sizeBytes)
+                    ] }),
+                    preview.language ? /* @__PURE__ */ jsxs("span", { style: mutedTextStyle, children: [
+                      "Language: ",
+                      preview.language
+                    ] }) : null,
+                    preview.truncated ? /* @__PURE__ */ jsx("span", { style: mutedTextStyle, children: "Preview truncated" }) : null
+                  ] })
+                ] }) : /* @__PURE__ */ jsx("div", { style: mutedTextStyle, children: "Select a file to preview Markdown, code, text, images, or PDFs." })
+              ] })
+            ]
+          }
+        )
+      ]
+    }
+  );
+}
+function findExactTextElement(text) {
+  const candidates = Array.from(document.querySelectorAll("div, span, a, p"));
+  return candidates.find((element) => element.textContent?.trim() === text) ?? null;
+}
+function mountStandaloneWorkspaceBrowser() {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+  const placeholder = findExactTextElement("Workspace Browser: Workspace Files");
+  if (!placeholder) return;
+  const mountNode = placeholder.parentElement ?? placeholder;
+  if (mountNode.dataset.workspaceBrowserStandaloneMounted === "true") return;
+  mountNode.dataset.workspaceBrowserStandaloneMounted = "true";
+  mountNode.innerHTML = "";
+  createRoot(mountNode).render(/* @__PURE__ */ jsx(StandaloneWorkspaceBrowser, {}));
+}
+function replaceSidebarPlaceholderWithLink() {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+  const placeholders = Array.from(document.querySelectorAll("div, span")).filter((element) => element.textContent?.trim() === "Workspace Browser: Workspace Files");
+  for (const element of placeholders) {
+    if (element.closest("[data-workspace-browser-standalone-mounted='true']")) continue;
+    const wrapper = element.parentElement ?? element;
+    if ((wrapper.textContent ?? "").includes("Back")) continue;
+    if (wrapper.dataset.workspaceBrowserSidebarLinked === "true") continue;
+    wrapper.dataset.workspaceBrowserSidebarLinked = "true";
+    wrapper.innerHTML = "";
+    const link = document.createElement("a");
+    link.href = buildCompanyWorkspaceHref(currentCompanyPrefix());
+    link.textContent = "Workspace Files";
+    Object.assign(link.style, {
+      display: "flex",
+      alignItems: "center",
+      gap: "10px",
+      width: "100%",
+      padding: "8px 12px",
+      textDecoration: "none",
+      color: "inherit",
+      fontSize: "13px",
+      fontWeight: "600",
+      cursor: "pointer"
+    });
+    wrapper.appendChild(link);
+  }
+}
+function bootstrapStandaloneFallback() {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+  const sync = () => {
+    const path = window.location.pathname;
+    if (path.endsWith("/workspace-files")) {
+      mountStandaloneWorkspaceBrowser();
+    } else {
+      replaceSidebarPlaceholderWithLink();
+    }
+  };
+  sync();
+  const observer = new MutationObserver(() => sync());
+  observer.observe(document.body, { childList: true, subtree: true });
+}
+bootstrapStandaloneFallback();
 export {
   WorkspaceBrowserPage,
   WorkspaceBrowserTab,
